@@ -76,6 +76,18 @@ class ReceiverDriver(ABC):
     def set_source(self, zone: str, source: str) -> CommandResult:
         raise NotImplementedError
 
+    def set_source_power(self, source: str, on: bool) -> CommandResult:
+        raise NotImplementedError
+
+    def set_source_mute(self, source: str, muted: bool) -> CommandResult:
+        raise NotImplementedError
+
+    def set_source_volume(self, source: str, value: float) -> CommandResult:
+        raise NotImplementedError
+
+    def set_source_channel(self, source: str, channel: int) -> CommandResult:
+        raise NotImplementedError
+
     def query_all(self) -> None:
         """Refresh state from the device.
 
@@ -86,12 +98,18 @@ class ReceiverDriver(ABC):
 
 @dataclass(frozen=True)
 class ReceiverEvent:
-    """Normalized event emitted by a driver."""
+    """Normalized event emitted by a driver.
+
+    Exactly one of ``zone`` or ``source`` is normally populated for a
+    device-specific state event.  Source events describe the physical source
+    itself rather than a zone's selection of that source.
+    """
 
     zone: str | None
     field: str
     value: Any
     raw: Any = None
+    source: str | None = None
 
 
 class DriverFactory(Protocol):

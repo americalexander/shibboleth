@@ -8,12 +8,16 @@ Topic layout:
     receiver/availability
     receiver/<zone>/<field>/set
     receiver/<zone>/<field>/state
+    receiver/sources/<source>/<field>/set
+    receiver/sources/<source>/<field>/state
 
 Examples:
 
-    receiver/main/power/set      -> on
-    receiver/main/volume/set     -> 35
-    receiver/zone2/source/set    -> CD
+    receiver/main/power/set              -> on
+    receiver/main/volume/set             -> 35
+    receiver/zone2/source/set            -> SIRIUS
+    receiver/sources/sirius/power/set    -> on
+    receiver/sources/sirius/channel/set  -> 42
 """
 
 from __future__ import annotations
@@ -59,33 +63,50 @@ class MQTTAdapter:
     def _on_connect(self, client, userdata, flags, reason_code, properties) -> None:
         client.publish(self._topic("availability"), "online", retain=True)
         client.subscribe(self._topic("+/+/set"))
+        client.subscribe(self._topic("sources/+/+/set"))
 
     def _on_message(self, client, userdata, msg) -> None:
         prefix = self.config.base_topic + "/"
         if not msg.topic.startswith(prefix):
             return
         parts = msg.topic[len(prefix):].split("/")
-        if len(parts) != 3 or parts[2] != "set":
-            return
-
-        zone, field = parts[:2]
         value = msg.payload.decode("utf-8").strip()
 
-        if field == "power":
-            self.driver.set_power(zone, value.lower() in {"on", "1", "true"})
-        elif field == "mute":
-            self.driver.set_mute(zone, value.lower() in {"on", "1", "true"})
-        elif field == "volume":
-            self.driver.set_volume(zone, float(value))
-        elif field == "source":
-            self.driver.set_source(zone, value)
-        else:
-            # Device-specific extensions can be routed through a future
-            # command registry without changing this adapter's contract.
+        if len(parts) == 3 and parts[2] == "set":
+            zone, field = parts[:2]
+            if field == "power":
+                self.driver.set_power(zone, value.lower() in {"on", "1", "true"})
+            elif field == "mute":
+                self.driver.set_mute(zone, value.lower() in {"on", "1", "true"})
+            elif field == "volume":
+                self.driver.set_volume(zone, float(value))
+            elif field == "source":
+                self.driver.set_source(zone, value)
+            return
+
+        if len(parts) == 4 and parts[0] == "sources" and parts[3] == "set":
+            source, field = parts[1:3]
+            if field == "power":
+                self.driver.set_source_power(
+                    source, value.lower() in {"on", "1", "true"}
+                )
+            elif field == "mute":
+                self.driver.set_source_mute(
+                    source, value.lower() in {"on", "1", "true"}
+                )
+            elif field == "volume":
+                self.driver.set_source_volume(source, float(value))
+            elif field == "channel":
+                self.driver.set_source_channel(source, int(value))
             return
 
     def publish_event(self, event: ReceiverEvent) -> None:
-        suffix = f"{event.zone}/{event.field}/state" if event.zone else f"{event.field}/state"
+        if event.source is not None:
+            suffix = f"sources/{event.source}/{event.field}/state"
+        elif event.zone is not None:
+            suffix = f"{event.zone}/{event.field}/state"
+        else:
+            suffix = f"{event.field}/state"
         self.client.publish(self._topic(suffix), str(event.value), retain=True)
 
     def start(self) -> None:

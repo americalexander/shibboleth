@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 
 from ..contracts import ReceiverDriver, ReceiverEvent
-from ..models import ReceiverCapabilities, ReceiverState, ZoneState
+from ..models import ReceiverCapabilities, ReceiverState, SourceState, ZoneState
 
 
 class BaseReceiverDriver(ReceiverDriver):
@@ -20,7 +20,8 @@ class BaseReceiverDriver(ReceiverDriver):
         self._state = ReceiverState(
             connected=False,
             ready=False,
-            zones={zone: ZoneState() for zone in capabilities.zones}
+            zones={zone: ZoneState() for zone in capabilities.zones},
+            sources={source: SourceState() for source in capabilities.sources}
         )
         self._event_sink = event_sink
         self._lock = threading.RLock()
@@ -50,6 +51,18 @@ class BaseReceiverDriver(ReceiverDriver):
         with self._lock:
             self._state.zones[zone].extras[key] = value
         self._emit(ReceiverEvent(zone=zone, field=f"extras/{key}", value=value))
+
+    def _set_source_field(self, source: str, field: str, value) -> None:
+        with self._lock:
+            setattr(self._state.sources[source], field, value)
+        self._emit(ReceiverEvent(zone=None, source=source, field=field, value=value))
+
+    def _set_source_extra(self, source: str, key: str, value) -> None:
+        with self._lock:
+            self._state.sources[source].extras[key] = value
+        self._emit(ReceiverEvent(
+            zone=None, source=source, field=f"extras/{key}", value=value
+        ))
 
     def _emit(self, event: ReceiverEvent) -> None:
         if self._event_sink is not None:

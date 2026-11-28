@@ -23,7 +23,8 @@ device-specific behavior.
 Implemented:
 
 * Generic serial transport contract and pyserial implementation.
-* Normalized zone/state/capability data model.
+* Normalized zone/state/capability data model, including independent source
+  devices that may be selected by multiple zones.
 * Receiver-driver contract.
 * Protocol contract.
 * ISCP stream parser and command builder.
@@ -32,7 +33,10 @@ Implemented:
   power, mute, volume, source, tuner frequency, preset, and listening mode
   where the workbook documents those controls for the TX-SR706.
 * SR-H1000 driver for the SSP power, mute, gain, and channel controls for
-  which the SSP specification supplies the required opcodes.
+  which the SSP specification supplies the required opcodes. The SR-H1000 is
+  modeled as the independent `sirius` source, not as a Main-zone device; the
+  same source can therefore be selected by Main and Zone 2 independently on
+  a receiver such as the TX-SR706.
 
 The MQTT adapter is intentionally kept thin. It maps normalized commands and
 state to MQTT topics; it does not know receiver-specific command strings.

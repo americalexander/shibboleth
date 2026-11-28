@@ -40,6 +40,22 @@ class ZoneCapabilities:
     extras: frozenset[str] = frozenset()
 
 
+@dataclass(frozen=True)
+class SourceCapabilities:
+    """Capabilities of an independent source device.
+
+    A source is not a receiver zone.  For example, the SR-H1000 is one
+    physical Sirius source which can be selected by more than one zone.
+    """
+
+    power: bool = False
+    mute: bool = False
+    volume: bool = False
+    channel: bool = False
+    metadata: bool = False
+    extras: frozenset[str] = frozenset()
+
+
 @dataclass
 class ZoneState:
     """Last device-confirmed state for one logical zone."""
@@ -55,6 +71,17 @@ class ZoneState:
 
 
 @dataclass
+class SourceState:
+    """Last device-confirmed state for one physical source."""
+
+    power: PowerState = PowerState.UNKNOWN
+    mute: MuteState = MuteState.UNKNOWN
+    volume: float | None = None
+    channel: int | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ReceiverState:
     """Device state plus connection status.
 
@@ -66,6 +93,7 @@ class ReceiverState:
     connected: bool = False
     ready: bool = False
     zones: dict[str, ZoneState] = field(default_factory=dict)
+    sources: dict[str, SourceState] = field(default_factory=dict)
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -76,6 +104,7 @@ class ReceiverCapabilities:
     model: str
     zones: dict[str, ZoneCapabilities]
     protocol: str
+    sources: dict[str, SourceCapabilities] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -26,7 +26,7 @@ from ..models import (
     MuteState,
     PowerState,
     ReceiverCapabilities,
-    ZoneCapabilities,
+    SourceCapabilities,
 )
 from ..protocol.ssp import LinkOp, SSPFrame, SSPLink, parse_frame
 from .base import BaseReceiverDriver
@@ -35,10 +35,11 @@ from .base import BaseReceiverDriver
 SR_H1000_CAPABILITIES = ReceiverCapabilities(
     model="SR-H1000",
     protocol="SSP",
-    zones={
-        "main": ZoneCapabilities(
-            power=True, mute=True, volume=True, source=False, tuner=True,
-            metadata=True, extras=frozenset({"category", "signal_quality"})
+    zones={},
+    sources={
+        "sirius": SourceCapabilities(
+            power=True, mute=True, volume=True, channel=True, metadata=True,
+            extras=frozenset({"category", "signal_quality"})
         )
     },
 )
@@ -94,42 +95,51 @@ class SRH1000Driver(BaseReceiverDriver):
         return frame.payload
 
     def set_power(self, zone: str, on: bool) -> CommandResult:
-        self._require_main(zone)
+        raise ValueError("SR-H1000 power is a source-level control, not a zone control")
+
+    def set_mute(self, zone: str, muted: bool) -> CommandResult:
+        raise ValueError("SR-H1000 mute is a source-level control, not a zone control")
+
+    def set_volume(self, zone: str, value: float) -> CommandResult:
+        raise ValueError("SR-H1000 gain is a source-level control, not a zone control")
+
+    def set_source(self, zone: str, source: str) -> CommandResult:
+        raise NotImplementedError("SR-H1000 does not select itself as a zone source")
+
+    def set_source_power(self, source: str, on: bool) -> CommandResult:
+        self._require_sirius(source)
         mode = 3 if on else 0
         response = self._request(0x0008, bytes([mode]))
         self._check_set_response(response, 0x2008)
-        self._set_zone_field(zone, "power", PowerState.ON if on else PowerState.OFF)
-        return CommandResult(True, "power command accepted", True)
+        self._set_source_field(source, "power", PowerState.ON if on else PowerState.OFF)
+        return CommandResult(True, "source power command accepted", True)
 
-    def set_mute(self, zone: str, muted: bool) -> CommandResult:
-        self._require_main(zone)
+    def set_source_mute(self, source: str, muted: bool) -> CommandResult:
+        self._require_sirius(source)
         response = self._request(0x0003, bytes([1 if muted else 0]))
         self._check_set_response(response, 0x2003)
-        self._set_zone_field(
-            zone, "mute", MuteState.MUTED if muted else MuteState.UNMUTED
+        self._set_source_field(
+            source, "mute", MuteState.MUTED if muted else MuteState.UNMUTED
         )
-        return CommandResult(True, "mute command accepted", True)
+        return CommandResult(True, "source mute command accepted", True)
 
-    def set_volume(self, zone: str, value: float) -> CommandResult:
-        self._require_main(zone)
+    def set_source_volume(self, source: str, value: float) -> CommandResult:
+        self._require_sirius(source)
         if not -76 <= value <= 5:
             raise ValueError("SR-H1000 SSP gain range is -76..+5 dB for G3")
         response = self._request(0x0002, struct.pack(">b", int(value)))
         self._check_set_response(response, 0x2002)
-        self._set_zone_field(zone, "volume", value)
-        return CommandResult(True, "gain command accepted", True)
+        self._set_source_field(source, "volume", value)
+        return CommandResult(True, "source gain command accepted", True)
 
-    def set_source(self, zone: str, source: str) -> CommandResult:
-        raise NotImplementedError("SR-H1000 has no normalized source selector")
-
-    def set_channel(self, zone: str, channel: int) -> CommandResult:
-        self._require_main(zone)
+    def set_source_channel(self, source: str, channel: int) -> CommandResult:
+        self._require_sirius(source)
         if not 0 <= channel <= 255:
             raise ValueError("SSP channel identifier must be 0..255")
         response = self._request(0x000A, bytes([channel, 0]))
         self._check_set_response(response, 0x200A)
-        self._set_zone_extra(zone, "channel", channel)
-        return CommandResult(True, "channel command accepted", True)
+        self._set_source_field(source, "channel", channel)
+        return CommandResult(True, "source channel command accepted", True)
 
     def query_all(self) -> None:
         for opcode, expected, field in (
@@ -151,15 +161,15 @@ class SRH1000Driver(BaseReceiverDriver):
 
             if field == "power" and len(response) >= 5:
                 mode = response[4]
-                self._set_zone_field("main", "power",
-                                     PowerState.OFF if mode == 0 else PowerState.ON)
+                self._set_source_field("sirius", "power",
+                                       PowerState.OFF if mode == 0 else PowerState.ON)
             elif field == "mute" and len(response) >= 5:
-                self._set_zone_field("main", "mute",
-                                     MuteState.MUTED if response[4] else MuteState.UNMUTED)
+                self._set_source_field("sirius", "mute",
+                                       MuteState.MUTED if response[4] else MuteState.UNMUTED)
             elif field == "volume" and len(response) >= 5:
-                self._set_zone_field("main", "volume", struct.unpack(">b", response[4:5])[0])
+                self._set_source_field("sirius", "volume", struct.unpack(">b", response[4:5])[0])
             elif field == "channel" and len(response) >= 5:
-                self._set_zone_extra("main", "channel", response[4])
+                self._set_source_field("sirius", "channel", response[4])
 
     @staticmethod
     def _check_set_response(response: bytes, expected_opcode: int) -> None:
@@ -175,6 +185,6 @@ class SRH1000Driver(BaseReceiverDriver):
             raise ValueError(f"SSP command failed with error 0x{err:04x}")
 
     @staticmethod
-    def _require_main(zone: str) -> None:
-        if zone != "main":
-            raise ValueError("SR-H1000 exposes only the main zone")
+    def _require_sirius(source: str) -> None:
+        if source != "sirius":
+            raise ValueError(f"unsupported SR-H1000 source: {source}")

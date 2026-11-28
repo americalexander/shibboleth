@@ -22,7 +22,13 @@ class StateManager:
         self._listeners.append(listener)
 
     def apply(self, event: ReceiverEvent) -> None:
-        if event.zone is None:
+        if event.source is not None:
+            source = self.state.sources[event.source]
+            if event.field.startswith("extras/"):
+                source.extras[event.field.removeprefix("extras/")] = event.value
+            else:
+                setattr(source, event.field, event.value)
+        elif event.zone is None:
             self.state.extras[event.field] = event.value
         else:
             zone = self.state.zones[event.zone]
