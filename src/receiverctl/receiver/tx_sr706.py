@@ -62,19 +62,27 @@ class TXSR706Driver(BaseReceiverDriver):
 
     def __init__(self, transport, event_sink=None) -> None:
         super().__init__(TX_SR706_CAPABILITIES, event_sink)
-        self.protocol = ISCPProtocol(transport)
+        self.protocol = ISCPProtocol(transport, event_sink=self._handle_protocol_message)
 
     def start(self) -> None:
-        self.protocol.transport.open()
+        self.protocol.start()
         self._set_connected(True)
 
     def stop(self) -> None:
-        self.protocol.transport.close()
+        self.protocol.stop()
         self._set_connected(False)
 
     def _command(self, command: str, parameter: str) -> CommandResult:
-        self.protocol.send(command, parameter)
-        return CommandResult(accepted=True, message=f"{command}{parameter}")
+        message = self.protocol.transact(command, parameter)
+        self.apply_message(message)
+        return CommandResult(
+            accepted=True,
+            message=f"{command}{parameter}",
+            state_changed=True,
+        )
+
+    def _handle_protocol_message(self, message: ISCPMessage) -> None:
+        self.apply_message(message)
 
     def set_power(self, zone: str, on: bool) -> CommandResult:
         if zone == "main":

@@ -27,8 +27,12 @@ Implemented:
   devices that may be selected by multiple zones.
 * Receiver-driver contract.
 * Protocol contract.
-* ISCP stream parser and command builder.
-* SSP frame builder/parser, checksum, byte stuffing, ACK/NACK frame support.
+* ISCP stream parser and command builder, with a continuous reader, serialized
+  request transactions, 50-ms response timeout, and unsolicited notification
+  dispatch.
+* SSP frame builder/parser, specification-correct byte stuffing, checksum,
+  ACK/NACK handling, 100-ms link timeout, up to three retransmissions,
+  duplicate-message suppression, and asynchronous Put-message dispatch.
 * TX-SR706 driver for the common Main and Zone 2 controls:
   power, mute, volume, source, tuner frequency, preset, and listening mode
   where the workbook documents those controls for the TX-SR706.
@@ -40,6 +44,29 @@ Implemented:
 
 The MQTT adapter is intentionally kept thin. It maps normalized commands and
 state to MQTT topics; it does not know receiver-specific command strings.
+
+## Shared transaction/event runtime
+
+Both protocol implementations now use the same runtime pattern:
+
+    Serial transport
+          │
+          ▼
+    dedicated reader thread
+          │
+          ├── matching response -> pending transaction
+          │
+          └── asynchronous message -> protocol event sink -> driver -> state/MQTT
+
+The transaction mechanics are shared, but correlation remains protocol-specific:
+SSP uses its sequence number and link ACK/NACK exchange, while ISCP serializes
+requests and correlates status responses by command because the RS-232 protocol
+provides no transaction identifier.
+
+For SSP, the reader also acknowledges valid incoming MSG frames immediately and
+waits for PutModuleReady status=0 before the SR-H1000 driver reports itself ready.
+For ISCP, the reader remains active continuously so unsolicited receiver status
+changes are not lost while no command is outstanding.
 
 ## RS-232 profiles
 

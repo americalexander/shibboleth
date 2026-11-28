@@ -37,10 +37,10 @@ class BaseReceiverDriver(ReceiverDriver):
             # deep-copy snapshot. For now this is a documented read model.
             return self._state
 
-    def _set_connected(self, value: bool) -> None:
+    def _set_connected(self, value: bool, ready: bool | None = None) -> None:
         with self._lock:
             self._state.connected = value
-            self._state.ready = value
+            self._state.ready = value if ready is None else ready
 
     def _set_zone_field(self, zone: str, field: str, value) -> None:
         with self._lock:

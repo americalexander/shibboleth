@@ -20,6 +20,7 @@ receiver/MQTT contracts.
 from __future__ import annotations
 
 import struct
+import threading
 
 from ..models import (
     CommandResult,
@@ -28,7 +29,7 @@ from ..models import (
     ReceiverCapabilities,
     SourceCapabilities,
 )
-from ..protocol.ssp import LinkOp, SSPFrame, SSPLink, parse_frame
+from ..protocol.ssp import SSPFrame, SSPLink
 from .base import BaseReceiverDriver
 
 
@@ -48,51 +49,58 @@ SR_H1000_CAPABILITIES = ReceiverCapabilities(
 class SRH1000Driver(BaseReceiverDriver):
     """Semantic SR-H1000 driver."""
 
+    READY_TIMEOUT = 45.0
+
     def __init__(self, transport, event_sink=None) -> None:
         super().__init__(SR_H1000_CAPABILITIES, event_sink)
-        self.link = SSPLink(transport)
+        self._module_ready = threading.Event()
+        self.link = SSPLink(transport, event_sink=self._handle_ssp_frame)
 
     def start(self) -> None:
-        self.link.transport.open()
-        self._set_connected(True)
+        self._module_ready.clear()
+        self.link.start()
+        self._set_connected(True, False)
+        try:
+            if not self._module_ready.wait(self.READY_TIMEOUT):
+                raise TimeoutError("timed out waiting for SSP PutModuleReady status=0")
+            self._state.ready = True
+        except Exception:
+            self.link.stop()
+            self._set_connected(False)
+            raise
 
     def stop(self) -> None:
-        self.link.transport.close()
+        self.link.stop()
+        self._module_ready.clear()
         self._set_connected(False)
 
-    def _request(self, opcode: int, params: bytes = b"") -> bytes:
+    def _request(self, opcode: int, params: bytes = b"", *, response_opcode: int | None = None) -> bytes:
         payload = struct.pack(">H", opcode) + params
-        seq = self.link.send(payload)
+        return self.link.transact(payload, response_opcode=response_opcode)
 
-        # A complete SSP implementation should use a dedicated reader/queue
-        # and handle ACKs and asynchronous Put messages independently. This
-        # synchronous helper is deliberately the first concrete layer.
-        raw = self.link.transport.read(1)
-        if raw != bytes([0xA4]):
-            raise TimeoutError(f"expected SSP SYNC, got {raw!r}")
-
-        # Read the fixed header through LEN.
-        header = bytearray(raw)
-        while len(header) < 6:
-            chunk = self.link.transport.read(1)
-            if not chunk:
-                raise TimeoutError("timed out reading SSP header")
-            header.extend(chunk)
-
-        length = header[5]
-        body = bytearray(header)
-        while len(body) < 7 + length:
-            chunk = self.link.transport.read(1)
-            if not chunk:
-                raise TimeoutError("timed out reading SSP payload")
-            body.extend(chunk)
-
-        frame = parse_frame(bytes(body))
-        if frame.seq != seq:
-            raise ValueError(f"SSP sequence mismatch: expected {seq}, got {frame.seq}")
-        if frame.linkop not in {LinkOp.MSG, LinkOp.ACK}:
-            raise ValueError(f"unexpected SSP link operation: {frame.linkop!r}")
-        return frame.payload
+    def _handle_ssp_frame(self, frame: SSPFrame) -> None:
+        payload = frame.payload
+        if len(payload) < 2:
+            return
+        opcode = struct.unpack(">H", payload[:2])[0]
+        if opcode == 0x8000 and len(payload) >= 3:
+            status = payload[2]
+            if status == 0:
+                self._module_ready.set()
+                self._set_connected(True, True)
+            elif status == 1:
+                self._module_ready.clear()
+                self._set_connected(True, False)
+            return
+        if opcode == 0x8004 and len(payload) >= 5:
+            system, code, subcode = payload[2:5]
+            # System 0 is tune status. The specification reports channel ID
+            # in subcode when tune status reaches code=0 (tune complete).
+            if system == 0 and code == 0:
+                self._set_source_field("sirius", "channel", subcode)
+            return
+        # Other Put messages are deliberately left at the protocol layer for
+        # future source metadata/status support.
 
     def set_power(self, zone: str, on: bool) -> CommandResult:
         raise ValueError("SR-H1000 power is a source-level control, not a zone control")
@@ -109,14 +117,14 @@ class SRH1000Driver(BaseReceiverDriver):
     def set_source_power(self, source: str, on: bool) -> CommandResult:
         self._require_sirius(source)
         mode = 3 if on else 0
-        response = self._request(0x0008, bytes([mode]))
+        response = self._request(0x0008, bytes([mode]), response_opcode=0x2008)
         self._check_set_response(response, 0x2008)
         self._set_source_field(source, "power", PowerState.ON if on else PowerState.OFF)
         return CommandResult(True, "source power command accepted", True)
 
     def set_source_mute(self, source: str, muted: bool) -> CommandResult:
         self._require_sirius(source)
-        response = self._request(0x0003, bytes([1 if muted else 0]))
+        response = self._request(0x0003, bytes([1 if muted else 0]), response_opcode=0x2003)
         self._check_set_response(response, 0x2003)
         self._set_source_field(
             source, "mute", MuteState.MUTED if muted else MuteState.UNMUTED
@@ -127,7 +135,7 @@ class SRH1000Driver(BaseReceiverDriver):
         self._require_sirius(source)
         if not -76 <= value <= 5:
             raise ValueError("SR-H1000 SSP gain range is -76..+5 dB for G3")
-        response = self._request(0x0002, struct.pack(">b", int(value)))
+        response = self._request(0x0002, struct.pack(">b", int(value)), response_opcode=0x2002)
         self._check_set_response(response, 0x2002)
         self._set_source_field(source, "volume", value)
         return CommandResult(True, "source gain command accepted", True)
@@ -136,7 +144,7 @@ class SRH1000Driver(BaseReceiverDriver):
         self._require_sirius(source)
         if not 0 <= channel <= 255:
             raise ValueError("SSP channel identifier must be 0..255")
-        response = self._request(0x000A, bytes([channel, 0]))
+        response = self._request(0x000A, bytes([channel, 0]), response_opcode=0x200A)
         self._check_set_response(response, 0x200A)
         self._set_source_field(source, "channel", channel)
         return CommandResult(True, "source channel command accepted", True)
@@ -148,7 +156,7 @@ class SRH1000Driver(BaseReceiverDriver):
             (0x4002, 0x6002, "volume"),
             (0x4008, 0x6008, "channel"),
         ):
-            response = self._request(opcode)
+            response = self._request(opcode, response_opcode=expected)
             if len(response) < 4:
                 raise ValueError("short SSP response")
             actual = struct.unpack(">H", response[:2])[0]
